@@ -12,6 +12,11 @@ import { AiFailureAnalyzer, type AiProviderName } from '../ai-insights/AiFailure
 import type { AiAnalysisResult } from '../ai-insights/types.js';
 import type { DiagnosticTelemetry } from '../forensics/types.js';
 import { PiiRedactor } from '../forensics/PiiRedactor.js';
+import {
+  DIAGNOSTICS_ATTACHMENT_NAME,
+  type Breadcrumb,
+  type FailureDiagnostics,
+} from '../forensics/DiagnosticsCapture.js';
 import { FlakyQuarantineManager } from './FlakyQuarantineManager.js';
 import { WebhookNotifier } from './WebhookNotifier.js';
 import { DiagnosticLogger } from './DiagnosticLogger.js';
@@ -87,6 +92,8 @@ interface ReportedTest {
   screenshotDataUri?: string;
   videoRelPath?: string;
   traceRelPath?: string;
+  urlAtFailure?: string;
+  breadcrumbs?: Breadcrumb[];
   ai?: AiAnalysisResult;
   aiError?: string;
 }
@@ -181,13 +188,14 @@ export class AiHtmlReporter implements Reporter {
     const screenshotDataUri = await this.readThumbnail(result);
     const videoRelPath = await this.copyLargeAttachment(result, ['video/webm', 'video/mp4'], 'video');
     const traceRelPath = await this.copyLargeAttachment(result, ['application/zip'], 'trace', 'trace');
+    const diagnostics = await this.readDiagnostics(result);
 
     let ai: AiAnalysisResult | undefined;
     let aiError: string | undefined;
     const isFailure = result.status === 'failed' || result.status === 'timedOut';
     if (this.analyzer && isFailure) {
       try {
-        ai = await this.runAiAnalysis(test, result, projectName);
+        ai = await this.runAiAnalysis(test, result, projectName, diagnostics);
       } catch (err) {
         aiError = err instanceof Error ? err.message : String(err);
       }
@@ -210,6 +218,8 @@ export class AiHtmlReporter implements Reporter {
       screenshotDataUri,
       videoRelPath,
       traceRelPath,
+      urlAtFailure: diagnostics?.urlAtFailure,
+      breadcrumbs: diagnostics?.breadcrumbs,
       ai,
       aiError,
     });
@@ -314,45 +324,165 @@ export class AiHtmlReporter implements Reporter {
 
     const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
     const overallEmoji = failed > 0 ? '🔴' : flaky > 0 ? '🟡' : '🟢';
+    const overallWord = failed > 0 ? 'Failing' : flaky > 0 ? 'Flaky' : 'Passing';
+    const themeColor = failed > 0 ? '#ef4444' : flaky > 0 ? '#f59e0b' : '#22c55e';
     const failedTests = this.results.filter((r) => r.status === 'failed' || r.status === 'timedOut');
 
     if (this.options.slackWebhookUrl) {
-      const failureLines = failedTests
-        .slice(0, 10)
-        .map((r) => {
-          const category = r.ai ? ` _(${r.ai.category})_` : '';
-          return `• *${r.testId ?? r.title}*${category} — \`${r.file}\``;
-        })
-        .join('\n');
-      const moreLine = failedTests.length > 10 ? `\n…and ${failedTests.length - 10} more` : '';
+      const blocks: Record<string, unknown>[] = [
+        {
+          type: 'header',
+          text: { type: 'plain_text', text: `${overallEmoji} ${this.options.projectTitle}`, emoji: true },
+        },
+        {
+          type: 'section',
+          fields: [
+            { type: 'mrkdwn', text: `*Status*\n${overallEmoji} ${overallWord}` },
+            { type: 'mrkdwn', text: `*Pass rate*\n${passRate}%` },
+            { type: 'mrkdwn', text: `*Passed*\n✅ ${passed} / ${total}` },
+            { type: 'mrkdwn', text: `*Failed*\n${failed > 0 ? '❌' : '—'} ${failed}` },
+            { type: 'mrkdwn', text: `*Skipped*\n⏭️ ${skipped}` },
+            { type: 'mrkdwn', text: `*Flaky*\n${flaky > 0 ? '🟡' : '—'} ${flaky}` },
+          ],
+        },
+        {
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: `⏱️ ${formatDuration(totalDurationMs)} · ${new Date().toLocaleString()}` }],
+        },
+      ];
 
-      const text =
-        `${overallEmoji} *${esc(this.options.projectTitle)}*\n` +
-        `${passed}/${total} passed (${passRate}%) · ${failed} failed · ${skipped} skipped · ${flaky} flaky · ${formatDuration(totalDurationMs)}` +
-        (failedTests.length > 0 ? `\n\n*Failures:*\n${failureLines}${moreLine}` : '') +
-        (this.options.reportUrl ? `\n\n<${this.options.reportUrl}|View full report>` : '');
+      if (failedTests.length > 0) {
+        blocks.push({ type: 'divider' });
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text:
+              `*🔎 Top failures*\n` +
+              failedTests
+                .slice(0, 10)
+                .map((r) => {
+                  const category = r.ai ? ` _(${r.ai.category})_` : '';
+                  return `• *${r.testId ?? r.title}*${category} — \`${r.file}\``;
+                })
+                .join('\n') +
+              (failedTests.length > 10 ? `\n…and ${failedTests.length - 10} more` : ''),
+          },
+        });
+      }
 
-      await WebhookNotifier.sendSlackNotification(this.options.slackWebhookUrl, text);
+      if (this.options.reportUrl) {
+        blocks.push({
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: '📊 View full report', emoji: true },
+              url: this.options.reportUrl,
+              style: failed > 0 ? 'danger' : 'primary',
+            },
+          ],
+        });
+      }
+
+      const fallbackText = `${overallWord}: ${passed}/${total} passed (${passRate}%), ${failed} failed — ${this.options.projectTitle}`;
+
+      await WebhookNotifier.sendSlackNotification(this.options.slackWebhookUrl, {
+        text: fallbackText,
+        blocks,
+        attachments: [{ color: themeColor, blocks: [] }],
+      });
     }
 
     if (this.options.teamsWebhookUrl) {
-      const failureLines = failedTests
-        .slice(0, 10)
-        .map((r) => `- **${r.testId ?? r.title}**${r.ai ? ` (${r.ai.category})` : ''} — ${r.file}`)
-        .join('\n');
-      const moreLine = failedTests.length > 10 ? `\n\n…and ${failedTests.length - 10} more` : '';
-      const reportLine = this.options.reportUrl ? `\n\n[View full report](${this.options.reportUrl})` : '';
+      const factSet = {
+        type: 'FactSet',
+        facts: [
+          { title: 'Status', value: `${overallEmoji} ${overallWord}` },
+          { title: 'Pass rate', value: `${passRate}%` },
+          { title: 'Passed', value: `${passed} / ${total}` },
+          { title: 'Failed', value: `${failed}` },
+          { title: 'Skipped', value: `${skipped}` },
+          { title: 'Flaky', value: `${flaky}` },
+          { title: 'Duration', value: formatDuration(totalDurationMs) },
+        ],
+      };
 
-      const text =
-        `${passed}/${total} passed (${passRate}%) · ${failed} failed · ${skipped} skipped · ${flaky} flaky · ${formatDuration(totalDurationMs)}` +
-        (failedTests.length > 0 ? `\n\n**Failures:**\n\n${failureLines}${moreLine}` : '') +
-        reportLine;
+      const body: Record<string, unknown>[] = [
+        {
+          type: 'Container',
+          style: failed > 0 ? 'attention' : flaky > 0 ? 'warning' : 'good',
+          bleed: true,
+          items: [
+            {
+              type: 'TextBlock',
+              text: `${overallEmoji} ${this.options.projectTitle}`,
+              weight: 'Bolder',
+              size: 'Large',
+              wrap: true,
+            },
+            {
+              type: 'TextBlock',
+              text: `${new Date().toLocaleString()}`,
+              isSubtle: true,
+              size: 'Small',
+              spacing: 'None',
+            },
+          ],
+        },
+        factSet,
+      ];
 
-      await WebhookNotifier.sendTeamsNotification(
-        this.options.teamsWebhookUrl,
-        `${overallEmoji} ${this.options.projectTitle}`,
-        text,
-      );
+      if (failedTests.length > 0) {
+        body.push({
+          type: 'TextBlock',
+          text: '🔎 **Top failures**',
+          weight: 'Bolder',
+          spacing: 'Medium',
+        });
+        body.push({
+          type: 'Container',
+          items: failedTests.slice(0, 10).map((r) => ({
+            type: 'ColumnSet',
+            columns: [
+              {
+                type: 'Column',
+                width: 'stretch',
+                items: [
+                  {
+                    type: 'TextBlock',
+                    text: `❌ **${esc(r.testId ?? r.title)}**${r.ai ? ` _(${esc(r.ai.category)})_` : ''}`,
+                    wrap: true,
+                  },
+                  { type: 'TextBlock', text: esc(r.file), isSubtle: true, size: 'Small', spacing: 'None', wrap: true },
+                ],
+              },
+            ],
+          })),
+        });
+        if (failedTests.length > 10) {
+          body.push({
+            type: 'TextBlock',
+            text: `…and ${failedTests.length - 10} more`,
+            isSubtle: true,
+            size: 'Small',
+          });
+        }
+      }
+
+      const actions = this.options.reportUrl
+        ? [{ type: 'Action.OpenUrl', title: '📊 View full report', url: this.options.reportUrl }]
+        : undefined;
+
+      const card = {
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        type: 'AdaptiveCard',
+        version: '1.4',
+        body,
+        ...(actions ? { actions } : {}),
+      };
+
+      await WebhookNotifier.sendTeamsNotification(this.options.teamsWebhookUrl, card);
     }
   }
 
@@ -360,6 +490,7 @@ export class AiHtmlReporter implements Reporter {
     test: TestCase,
     result: TestResult,
     projectName: string,
+    diagnostics?: FailureDiagnostics,
   ): Promise<AiAnalysisResult | undefined> {
     if (!this.analyzer) return undefined;
     const telemetry: DiagnosticTelemetry = {
@@ -370,15 +501,34 @@ export class AiHtmlReporter implements Reporter {
       error: result.error?.message ? stripAnsi(result.error.message) : undefined,
       stack: result.error?.stack ? stripAnsi(result.error.stack) : undefined,
       browser: projectName,
-      urlAtFailure: undefined,
+      urlAtFailure: diagnostics?.urlAtFailure,
       timestamp: new Date().toISOString(),
       workerIndex: result.workerIndex,
     };
     const consoleLogs = [
       ...result.stdout.map((s) => stripAnsi(s.toString())),
       ...result.stderr.map((s) => stripAnsi(s.toString())),
+      ...(diagnostics?.breadcrumbs.map((b) => `[${b.type}] ${b.detail}`) ?? []),
     ];
     return this.analyzer.analyze(telemetry, consoleLogs);
+  }
+
+  /** Reads the `diagnostics` JSON attachment the framework's own `captureFailureDiagnostics`
+   * fixture (`forensics/DiagnosticsCapture.ts`) attaches to a non-passing test via
+   * `testInfo.attach()` — the Reporter API itself has no live `Page`, so this is the only way
+   * it can learn the page URL and console/network breadcrumb trail at the moment of failure.
+   * Consumers that don't wire the fixture in simply never produce this attachment — the report
+   * still renders fully, just without this section, exactly like AI analysis being opt-in. */
+  private async readDiagnostics(result: TestResult): Promise<FailureDiagnostics | undefined> {
+    const attachment = result.attachments.find((a) => a.name === DIAGNOSTICS_ATTACHMENT_NAME);
+    if (!attachment) return undefined;
+    try {
+      const raw = attachment.body ?? (attachment.path ? await fs.readFile(attachment.path) : undefined);
+      if (!raw) return undefined;
+      return JSON.parse(raw.toString('utf-8')) as FailureDiagnostics;
+    } catch {
+      return undefined;
+    }
   }
 
   private async readThumbnail(result: TestResult): Promise<string | undefined> {
@@ -588,6 +738,54 @@ export class AiHtmlReporter implements Reporter {
       ${r.traceRelPath ? `<a class="trace-link" href="${esc(r.traceRelPath)}" download>Download trace.zip</a>` : ''}
     `;
 
+    const isFailure = r.status === 'failed' || r.status === 'timedOut';
+
+    const urlPanel = r.urlAtFailure
+      ? `<p class="url-at-failure"><span class="label">Page at failure:</span> <code>${esc(r.urlAtFailure)}</code></p>`
+      : '';
+
+    const breadcrumbPanel =
+      r.breadcrumbs && r.breadcrumbs.length > 0
+        ? `
+        <details class="breadcrumb-details" open>
+          <summary>Breadcrumb trail (${r.breadcrumbs.length}) — console, page errors &amp; failed/error responses leading up to the failure</summary>
+          <ul class="breadcrumb-list">
+            ${r.breadcrumbs
+              .map(
+                (b) =>
+                  `<li class="crumb crumb-${esc(b.type)}"><span class="crumb-type">${esc(b.type)}</span><span class="crumb-time">${esc(new Date(b.timestamp).toLocaleTimeString())}</span><span class="crumb-detail">${esc(b.detail)}</span></li>`,
+              )
+              .join('\n')}
+          </ul>
+        </details>`
+        : '';
+
+    const copyPayload = isFailure
+      ? JSON.stringify(
+          [
+            `Test: ${r.testId ? `${r.testId} — ` : ''}${r.title}`,
+            `File: ${r.file}`,
+            `Status: ${r.status}`,
+            r.urlAtFailure ? `Page at failure: ${r.urlAtFailure}` : '',
+            r.error ? `\nError:\n${r.error}` : '',
+            r.stack ? `\nStack:\n${r.stack}` : '',
+            r.breadcrumbs && r.breadcrumbs.length > 0
+              ? `\nBreadcrumbs:\n${r.breadcrumbs.map((b) => `[${b.type}] ${b.detail}`).join('\n')}`
+              : '',
+            r.ai ? `\nAI root cause (${r.ai.category}): ${r.ai.rootCause}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        )
+      : '';
+
+    const copyButton = isFailure
+      ? `<button type="button" class="copy-btn" title="Copy error details to clipboard" aria-label="Copy error details to clipboard" data-copy-text='${escAttr(copyPayload)}' onclick="event.stopPropagation(); copyErrorDetails(this)">
+          <svg class="copy-icon" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M4 13V5a2 2 0 0 1 2-2h8"></path></svg>
+          <span class="copy-btn-label">Copy details</span>
+        </button>`
+      : '';
+
     return `
     <article id="${anchorId}" class="test-card status-${esc(r.status)}" data-search="${esc((r.title + ' ' + r.file + ' ' + r.tags.join(' ')).toLowerCase())}" data-status="${esc(r.status)}">
       <header class="test-card-hdr" onclick="this.parentElement.classList.toggle('open')">
@@ -597,10 +795,13 @@ export class AiHtmlReporter implements Reporter {
         ${r.isFlaky ? '<span class="badge badge-flaky">flaky</span>' : ''}
         <span class="duration">${formatDuration(r.durationMs)}</span>
         <span class="proj">${esc(r.project)}</span>
+        ${copyButton}
       </header>
       <div class="test-card-body">
         <p class="file-path">${esc(r.file)}${r.retries > 0 ? ` · ${r.retries} retr${r.retries === 1 ? 'y' : 'ies'}` : ''}</p>
+        ${urlPanel}
         ${r.error ? `<pre class="error">${esc(r.error)}</pre>` : ''}
+        ${breadcrumbPanel}
         ${media}
         ${aiPanel}
         ${r.stack ? `<details class="stack-details"><summary>Stack trace</summary><pre>${esc(r.stack)}</pre></details>` : ''}
@@ -636,6 +837,16 @@ function esc(value: string | undefined | null): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Escapes a value for use inside a single-quoted HTML attribute (the `copyErrorDetails` payload
+ * uses single quotes so the multi-line text itself can contain double quotes unescaped). */
+function escAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function escId(value: string): string {
@@ -684,6 +895,23 @@ const STYLES = `
   .tc-id { font-family: ui-monospace, monospace; color: var(--brand); font-size: 12px; }
   .test-card-body { display: none; padding: 0 16px 16px; }
   .test-card.open .test-card-body { display: block; }
+  .copy-btn { display: inline-flex; align-items: center; gap: 5px; background: var(--border); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 4px 9px; font-size: 11px; cursor: pointer; }
+  .copy-btn:hover { color: var(--text); border-color: var(--brand); }
+  .copy-btn.copied { color: var(--pass); border-color: var(--pass); }
+  .copy-btn .copy-icon { flex-shrink: 0; }
+  .url-at-failure { font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+  .url-at-failure .label { color: var(--text); font-weight: 600; }
+  .url-at-failure code { background: var(--border); padding: 1px 6px; border-radius: 4px; color: var(--text); word-break: break-all; }
+  .breadcrumb-details { margin: 10px 0; }
+  .breadcrumb-details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .breadcrumb-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .crumb { display: flex; gap: 8px; align-items: baseline; padding: 5px 10px; font-size: 11.5px; border-bottom: 1px solid var(--border); font-family: ui-monospace, monospace; }
+  .crumb:last-child { border-bottom: none; }
+  .crumb-type { flex-shrink: 0; text-transform: uppercase; font-weight: 700; font-size: 10px; padding: 1px 6px; border-radius: 4px; }
+  .crumb-console .crumb-type, .crumb-pageerror .crumb-type { background: rgba(239,68,68,.15); color: var(--fail); }
+  .crumb-request-failed .crumb-type, .crumb-response-error .crumb-type { background: rgba(245,158,11,.15); color: var(--flake); }
+  .crumb-time { flex-shrink: 0; color: var(--muted); font-size: 10.5px; }
+  .crumb-detail { color: var(--text); word-break: break-word; }
   .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
   .badge-passed { background: rgba(34,197,94,.15); color: var(--pass); }
   .badge-failed, .badge-timedOut { background: rgba(239,68,68,.15); color: var(--fail); }
@@ -729,6 +957,37 @@ const SCRIPT = `
       var matchesStatus = !failedOnly || status === 'failed' || status === 'timedOut';
       card.style.display = (matchesText && matchesStatus) ? '' : 'none';
     });
+  }
+  function copyErrorDetails(btn) {
+    var raw = btn.getAttribute('data-copy-text');
+    var text = raw;
+    try { text = JSON.parse(raw); } catch (e) { /* fall back to raw string */ }
+    var done = function () {
+      var label = btn.querySelector('.copy-btn-label');
+      var prev = label ? label.textContent : '';
+      btn.classList.add('copied');
+      if (label) label.textContent = 'Copied!';
+      setTimeout(function () {
+        btn.classList.remove('copied');
+        if (label) label.textContent = prev;
+      }, 1800);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+  function fallbackCopy(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* no-op */ }
+    document.body.removeChild(ta);
+    done();
   }
   function jumpTo(link) {
     showTab('tests');

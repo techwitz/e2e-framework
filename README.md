@@ -1,4 +1,4 @@
-# e2e-framework
+# @open-test/playwright-core
 
 **Enterprise Playwright E2E, Data-Driven Testing (DDT), Performance & AI-Powered Testing Framework.**
 
@@ -9,11 +9,9 @@ auditing, visual regression, HAR/PII-redacted failure forensics, optional AI-ass
 triage, and a BDD-style `Given`/`When`/`Then` wrapper that doubles as living documentation. MIT
 licensed, zero paid tools, zero vendor lock-in.
 
-This repo contains exactly one package: [`packages/core`](./packages/core)
-(`@open-test/playwright-core`). It has **zero knowledge of any specific application** — nothing
-in here is tied to one product, one auth scheme, or one UI. You install it and build your own
-domain-specific test suite (page objects, tasks, mocks, specs) in your own project, the same way
-you'd build on top of any other test framework.
+This package has **no knowledge of any specific application** — it's the reusable engine. You
+install it and build your own domain-specific test suite (page objects, tasks, mocks, specs) in
+your own project, the same way you'd build on top of any other test framework.
 
 ## Requirements
 
@@ -94,6 +92,11 @@ config module rather than scattering `process.env.X ?? 'hardcoded-value'` across
 `ConfigLoader` (below) gives you an env-var-driven starting point.
 
 ## Building your own test suite on top
+
+The intended pattern: `core` provides the primitives, your app's own package supplies the domain
+knowledge — page objects extending `BasePage`, REST clients extending `BaseApiClient`, business
+"tasks" extending `BaseTask`, and your own role-seed helper built on this package's generic
+`SessionManager`/`AuthStorageSeed`.
 
 ### 1. Page objects
 
@@ -200,7 +203,7 @@ withData<Row>(path.resolve(process.cwd(), 'data/users.csv'), {}, RowSchema).test
 ```
 
 CSV, Excel (`.xlsx` — pass `{ sheetName }`), and JSON are all supported via the same `withData()`
-API — see [`packages/core/src/data-driven`](./packages/core/src/data-driven).
+API — see [`src/data-driven`](./src/data-driven).
 
 ## Performance budgets & accessibility
 
@@ -239,7 +242,7 @@ If a later test needs to simulate that session expiring/being cleared and reload
 — `seedSession()`'s write happens via a permanent `page.addInitScript()` that Playwright has no
 API to unregister, so a bare removal gets silently re-written on the very next reload.
 `clearSession()` handles this correctly — see
-[`packages/core/src/auth/StorageStateProvider.ts`](./packages/core/src/auth/StorageStateProvider.ts).
+[`src/auth/StorageStateProvider.ts`](./src/auth/StorageStateProvider.ts).
 
 ## Generating living documentation
 
@@ -253,10 +256,10 @@ npx tsx node_modules/@open-test/playwright-core/src/bdd-living-docs/cli.ts <spec
 Or, if you've cloned this repo directly to work on the framework itself:
 
 ```bash
-pnpm --dir packages/core generate:living-docs
+pnpm generate:living-docs
 ```
 
-## What's in `packages/core`
+## What's in here
 
 | Module | What it does |
 |---|---|
@@ -281,16 +284,10 @@ pnpm install
 pnpm typecheck
 ```
 
-CI (yours, or a fork's) should at minimum run `pnpm --dir packages/core typecheck` and a grep-based
-check that `packages/core/src` never imports anything product-specific — that's the one hard rule
-that keeps this reusable. See [CONTRIBUTING.md](./packages/core/CONTRIBUTING.md).
+## Contributing
 
-## Package docs
-
-- [`packages/core` README](./packages/core/README.md) — the same install/quickstart content as
-  above, kept alongside the package so it travels correctly if published to npm
-- [`packages/core` CONTRIBUTING](./packages/core/CONTRIBUTING.md) — the no-product-coupling rule
-  plus the self-check command
+See [CONTRIBUTING.md](./CONTRIBUTING.md) — the no-product-coupling rule plus the self-check
+command.
 
 ## License
 

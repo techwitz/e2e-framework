@@ -1,0 +1,28 @@
+{
+  "name": "@bien/lxp-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bien LXP Enterprise Playwright E2E, DDT, Performance & Regression Test Suite",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:regression": "playwright test --grep @regression",
+    "test:ddt": "playwright test --grep @ddt",
+    "test:perf": "playwright test --grep @perf",
+    "test:a11y": "playwright test --grep @accessibility",
+    "test:visual": "playwright test --grep @visual",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@open-test/playwright-core": "workspace:*",
+    "@playwright/test": "^1.58.2",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "typescript": "~5.7.3"
+  }
+}

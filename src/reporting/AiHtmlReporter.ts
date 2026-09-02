@@ -8,13 +8,15 @@ import type {
   TestResult,
   FullResult,
 } from '@playwright/test/reporter';
-import { AiFailureAnalyzer } from '../ai-insights/AiFailureAnalyzer.js';
+import { AiFailureAnalyzer, type AiProviderName } from '../ai-insights/AiFailureAnalyzer.js';
 import type { AiAnalysisResult } from '../ai-insights/types.js';
 import type { DiagnosticTelemetry } from '../forensics/types.js';
 import { PiiRedactor } from '../forensics/PiiRedactor.js';
 import { FlakyQuarantineManager } from './FlakyQuarantineManager.js';
+import { WebhookNotifier } from './WebhookNotifier.js';
+import { DiagnosticLogger } from './DiagnosticLogger.js';
 
-export type AiReportProvider = 'gemini' | 'openai' | 'ollama' | 'claude' | 'none';
+export type AiReportProvider = AiProviderName;
 
 export interface AiHtmlReporterOptions {
   /** Directory the report (and copied assets) are written to. Default: 'ai-html-report'. */
@@ -36,6 +38,36 @@ export interface AiHtmlReporterOptions {
   flakyStorePath?: string;
   /** Number of times a test must flake before being flagged for quarantine. Default: 3. */
   quarantineThreshold?: number;
+  /**
+   * Slack incoming-webhook URL to post a run summary to once the report is written. Defaults
+   * to `process.env.SLACK_WEBHOOK_URL`. Omit both to skip Slack entirely — like AI analysis,
+   * this is opt-in, not automatic.
+   */
+  slackWebhookUrl?: string;
+  /** Microsoft Teams incoming-webhook URL, same opt-in behavior. Defaults to
+   * `process.env.TEAMS_WEBHOOK_URL`. */
+  teamsWebhookUrl?: string;
+  /**
+   * A URL where the generated HTML report will be reachable once uploaded (e.g. a CI artifact
+   * link, an S3/blob URL your pipeline publishes it to) — included in the Slack/Teams message
+   * if given. The reporter does not upload the report anywhere itself; this is purely for
+   * linking to wherever your own CI step puts it.
+   */
+  reportUrl?: string;
+  /** Only post to Slack/Teams when the run has at least one failure. Default: false (always
+   * post a summary when a webhook is configured, pass or fail). */
+  notifyOnFailureOnly?: boolean;
+  /**
+   * If set, fails the process (`process.exitCode = 1`) when the run's pass rate falls below
+   * this percentage (0-100) — independent of, and in addition to, Playwright's own exit code.
+   * Useful for a "quality gate" step that should reject a build even when the individual test
+   * failures alone wouldn't otherwise be configured to fail CI (e.g. treating an accessibility
+   * suite dropping below 95% as a hard gate rather than informational). Default: undefined
+   * (no gate — this reporter never changes the exit code unless you opt in).
+   */
+  minPassRatePercent?: number;
+  /** How many of the slowest tests to list in the report's Performance tab. Default: 10. */
+  slowestTestsCount?: number;
 }
 
 interface ReportedTest {
@@ -79,6 +111,12 @@ export class AiHtmlReporter implements Reporter {
     Pick<AiHtmlReporterOptions, 'outputDir' | 'outputFile' | 'projectTitle' | 'testIdPattern'>
   > & {
     aiProvider: AiReportProvider;
+    slackWebhookUrl?: string;
+    teamsWebhookUrl?: string;
+    reportUrl?: string;
+    notifyOnFailureOnly: boolean;
+    minPassRatePercent?: number;
+    slowestTestsCount: number;
   };
   private readonly results: ReportedTest[] = [];
   private analyzer?: AiFailureAnalyzer;
@@ -96,8 +134,18 @@ export class AiHtmlReporter implements Reporter {
       projectTitle: options.projectTitle ?? 'Test Execution Report',
       testIdPattern: options.testIdPattern ?? /\[(TC-[A-Z]+-\d+)\]/,
       aiProvider,
+      slackWebhookUrl: options.slackWebhookUrl ?? process.env.SLACK_WEBHOOK_URL,
+      teamsWebhookUrl: options.teamsWebhookUrl ?? process.env.TEAMS_WEBHOOK_URL,
+      reportUrl: options.reportUrl ?? process.env.AI_REPORT_URL,
+      notifyOnFailureOnly: options.notifyOnFailureOnly ?? false,
+      minPassRatePercent: options.minPassRatePercent,
+      slowestTestsCount: options.slowestTestsCount ?? 10,
     };
 
+    // AI analysis is opt-in for a real reason, not just caution: every call is either a paid
+    // API request (Gemini/OpenAI/Claude) or real local compute (Ollama). `aiProvider` defaults
+    // to 'none' above, and the analyzer is only ever constructed when a real provider was
+    // explicitly named — no code path here can silently start making AI calls.
     if (aiProvider !== 'none') {
       this.analyzer = new AiFailureAnalyzer(aiProvider);
     }
@@ -170,8 +218,12 @@ export class AiHtmlReporter implements Reporter {
   async onEnd(_result: FullResult): Promise<void> {
     await fs.mkdir(this.options.outputDir, { recursive: true });
     await FlakyQuarantineManager.persist();
-    const html = this.renderHtml(Date.now() - this.startedAt);
+    const totalDurationMs = Date.now() - this.startedAt;
+    const html = this.renderHtml(totalDurationMs);
     await fs.writeFile(path.join(this.options.outputDir, this.options.outputFile), html, 'utf-8');
+    await this.writeJsonSummary(totalDurationMs);
+    await this.postSummaryNotifications(totalDurationMs);
+    this.applyQualityGate();
   }
 
   printsToStdio(): boolean {
@@ -179,6 +231,130 @@ export class AiHtmlReporter implements Reporter {
   }
 
   // ---------------------------------------------------------------------------------------
+
+  private computeCounts() {
+    const total = this.results.length;
+    const passed = this.results.filter((r) => r.status === 'passed').length;
+    const failed = this.results.filter((r) => r.status === 'failed' || r.status === 'timedOut').length;
+    const skipped = this.results.filter((r) => r.status === 'skipped').length;
+    const flaky = this.results.filter((r) => r.isFlaky).length;
+    const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
+    return { total, passed, failed, skipped, flaky, passRate };
+  }
+
+  /** Writes a small machine-readable summary alongside the HTML report — for CI steps, chat
+   * bots, or dashboards that want the numbers without parsing HTML. Includes an AI-category
+   * breakdown of failures (a lightweight form of failure clustering: several failing tests
+   * sharing one `[LOCATOR_DRIFT]`/`[API_REGRESSION]`/etc. category usually share one root
+   * cause) when AI analysis was enabled for this run. */
+  private async writeJsonSummary(totalDurationMs: number): Promise<void> {
+    const counts = this.computeCounts();
+    const failuresByCategory: Record<string, number> = {};
+    for (const r of this.results) {
+      if (r.ai) failuresByCategory[r.ai.category] = (failuresByCategory[r.ai.category] ?? 0) + 1;
+    }
+    const slowest = [...this.results]
+      .sort((a, b) => b.durationMs - a.durationMs)
+      .slice(0, this.options.slowestTestsCount)
+      .map((r) => ({ testId: r.testId, title: r.title, file: r.file, durationMs: r.durationMs }));
+
+    const summary = {
+      generatedAt: new Date().toISOString(),
+      projectTitle: this.options.projectTitle,
+      totalDurationMs,
+      ...counts,
+      failuresByCategory,
+      slowestTests: slowest,
+      failedTests: this.results
+        .filter((r) => r.status === 'failed' || r.status === 'timedOut')
+        .map((r) => ({
+          testId: r.testId,
+          title: r.title,
+          file: r.file,
+          aiCategory: r.ai?.category,
+          aiRootCause: r.ai?.rootCause,
+        })),
+    };
+
+    await fs.writeFile(
+      path.join(this.options.outputDir, 'summary.json'),
+      JSON.stringify(summary, null, 2),
+      'utf-8',
+    );
+  }
+
+  /** Optional CI gate, independent of Playwright's own pass/fail exit code — see
+   * `minPassRatePercent`'s doc comment on `AiHtmlReporterOptions`. */
+  private applyQualityGate(): void {
+    if (this.options.minPassRatePercent == null) return;
+    const { passRate, total } = this.computeCounts();
+    if (total > 0 && passRate < this.options.minPassRatePercent) {
+      DiagnosticLogger.warn('Quality gate failed: pass rate below configured minimum', {
+        passRate,
+        minPassRatePercent: this.options.minPassRatePercent,
+      });
+      process.exitCode = 1;
+    }
+  }
+
+  /** Posts a run summary to Slack and/or Teams — strictly opt-in, same as AI analysis: nothing
+   * is sent unless `slackWebhookUrl`/`teamsWebhookUrl` (or their env-var equivalents) are set.
+   * A webhook failure here is logged, never thrown — a notification problem must not fail the
+   * test run or mask the real pass/fail result. */
+  private async postSummaryNotifications(totalDurationMs: number): Promise<void> {
+    if (!this.options.slackWebhookUrl && !this.options.teamsWebhookUrl) return;
+
+    const total = this.results.length;
+    const passed = this.results.filter((r) => r.status === 'passed').length;
+    const failed = this.results.filter((r) => r.status === 'failed' || r.status === 'timedOut').length;
+    const skipped = this.results.filter((r) => r.status === 'skipped').length;
+    const flaky = this.results.filter((r) => r.isFlaky).length;
+
+    if (failed === 0 && this.options.notifyOnFailureOnly) return;
+
+    const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
+    const overallEmoji = failed > 0 ? '🔴' : flaky > 0 ? '🟡' : '🟢';
+    const failedTests = this.results.filter((r) => r.status === 'failed' || r.status === 'timedOut');
+
+    if (this.options.slackWebhookUrl) {
+      const failureLines = failedTests
+        .slice(0, 10)
+        .map((r) => {
+          const category = r.ai ? ` _(${r.ai.category})_` : '';
+          return `• *${r.testId ?? r.title}*${category} — \`${r.file}\``;
+        })
+        .join('\n');
+      const moreLine = failedTests.length > 10 ? `\n…and ${failedTests.length - 10} more` : '';
+
+      const text =
+        `${overallEmoji} *${esc(this.options.projectTitle)}*\n` +
+        `${passed}/${total} passed (${passRate}%) · ${failed} failed · ${skipped} skipped · ${flaky} flaky · ${formatDuration(totalDurationMs)}` +
+        (failedTests.length > 0 ? `\n\n*Failures:*\n${failureLines}${moreLine}` : '') +
+        (this.options.reportUrl ? `\n\n<${this.options.reportUrl}|View full report>` : '');
+
+      await WebhookNotifier.sendSlackNotification(this.options.slackWebhookUrl, text);
+    }
+
+    if (this.options.teamsWebhookUrl) {
+      const failureLines = failedTests
+        .slice(0, 10)
+        .map((r) => `- **${r.testId ?? r.title}**${r.ai ? ` (${r.ai.category})` : ''} — ${r.file}`)
+        .join('\n');
+      const moreLine = failedTests.length > 10 ? `\n\n…and ${failedTests.length - 10} more` : '';
+      const reportLine = this.options.reportUrl ? `\n\n[View full report](${this.options.reportUrl})` : '';
+
+      const text =
+        `${passed}/${total} passed (${passRate}%) · ${failed} failed · ${skipped} skipped · ${flaky} flaky · ${formatDuration(totalDurationMs)}` +
+        (failedTests.length > 0 ? `\n\n**Failures:**\n\n${failureLines}${moreLine}` : '') +
+        reportLine;
+
+      await WebhookNotifier.sendTeamsNotification(
+        this.options.teamsWebhookUrl,
+        `${overallEmoji} ${this.options.projectTitle}`,
+        text,
+      );
+    }
+  }
 
   private async runAiAnalysis(
     test: TestCase,
@@ -291,6 +467,31 @@ export class AiHtmlReporter implements Reporter {
       )
       .join('\n');
 
+    const slowestTests = [...this.results]
+      .sort((a, b) => b.durationMs - a.durationMs)
+      .slice(0, this.options.slowestTestsCount);
+    const slowestRows = slowestTests
+      .map(
+        (r, i) => `
+        <tr class="status-${esc(r.status)}">
+          <td>${i + 1}</td>
+          <td><a href="#test-${esc(r.file)}-${esc(r.title)}" onclick="return jumpTo(this)">${esc(r.testId ?? r.title)}</a></td>
+          <td>${esc(r.file)}</td>
+          <td><span class="badge badge-${esc(r.status)}">${esc(r.status)}</span></td>
+          <td>${formatDuration(r.durationMs)}</td>
+        </tr>`,
+      )
+      .join('\n');
+
+    const failuresByCategory: Record<string, number> = {};
+    for (const r of this.results) {
+      if (r.ai) failuresByCategory[r.ai.category] = (failuresByCategory[r.ai.category] ?? 0) + 1;
+    }
+    const categoryRows = Object.entries(failuresByCategory)
+      .sort((a, b) => b[1] - a[1])
+      .map(([category, count]) => `<tr><td>${esc(category)}</td><td>${count}</td></tr>`)
+      .join('\n');
+
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -318,6 +519,7 @@ export class AiHtmlReporter implements Reporter {
     <button class="tab-btn active" onclick="showTab('tests')">Tests</button>
     <button class="tab-btn" onclick="showTab('trace')">Traceability</button>
     <button class="tab-btn" onclick="showTab('flake')">Flaky History (${flakyRecords.length})</button>
+    <button class="tab-btn" onclick="showTab('perf')">Performance</button>
   </nav>
 
   <section id="tab-tests" class="tab-panel">
@@ -341,6 +543,20 @@ export class AiHtmlReporter implements Reporter {
       <thead><tr><th>Test</th><th>File</th><th>Flake count</th><th>State</th><th>Last flake</th></tr></thead>
       <tbody>${flakyRows || '<tr><td colspan="5" class="empty">No flaky tests recorded yet.</td></tr>'}</tbody>
     </table>
+  </section>
+
+  <section id="tab-perf" class="tab-panel" style="display:none">
+    <p class="meta">Top ${this.options.slowestTestsCount} slowest tests this run — a quick way to spot what's dragging out CI time.</p>
+    <table class="data-table">
+      <thead><tr><th>#</th><th>Test</th><th>File</th><th>Status</th><th>Duration</th></tr></thead>
+      <tbody>${slowestRows || '<tr><td colspan="5" class="empty">No tests recorded.</td></tr>'}</tbody>
+    </table>
+    ${categoryRows ? `
+    <p class="meta" style="margin-top:24px">Failures grouped by AI-assigned category — several failures sharing one category usually share one root cause (a lightweight form of failure clustering).</p>
+    <table class="data-table">
+      <thead><tr><th>Category</th><th>Failures</th></tr></thead>
+      <tbody>${categoryRows}</tbody>
+    </table>` : ''}
   </section>
 
   <script>${SCRIPT}</script>

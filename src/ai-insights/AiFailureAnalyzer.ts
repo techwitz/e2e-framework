@@ -4,13 +4,28 @@ import { GeminiProvider } from './providers/GeminiProvider.js';
 import { OpenAiProvider } from './providers/OpenAiProvider.js';
 import { OllamaProvider } from './providers/OllamaProvider.js';
 import { ClaudeProvider } from './providers/ClaudeProvider.js';
+import { NoOpProvider } from './providers/NoOpProvider.js';
 import { PiiRedactor } from '../forensics/PiiRedactor.js';
+
+export type AiProviderName = 'gemini' | 'openai' | 'ollama' | 'claude' | 'none';
 
 export class AiFailureAnalyzer {
   private provider: ILlmProvider;
+  readonly providerName: AiProviderName;
 
-  constructor(providerName: 'gemini' | 'openai' | 'ollama' | 'claude' | 'none' = 'gemini') {
+  /**
+   * AI analysis is opt-in, never the default — real API calls cost real money (or, for
+   * Ollama, real local compute). The default here is `'none'`, which resolves to a
+   * `NoOpProvider` that throws loudly if `analyze()` is ever actually called on it, rather
+   * than silently making a paid call to whichever provider happened to be hardcoded as a
+   * "convenient" default.
+   */
+  constructor(providerName: AiProviderName = 'none') {
+    this.providerName = providerName;
     switch (providerName) {
+      case 'gemini':
+        this.provider = new GeminiProvider();
+        break;
       case 'openai':
         this.provider = new OpenAiProvider();
         break;
@@ -20,11 +35,17 @@ export class AiFailureAnalyzer {
       case 'claude':
         this.provider = new ClaudeProvider();
         break;
-      case 'gemini':
+      case 'none':
       default:
-        this.provider = new GeminiProvider();
+        this.provider = new NoOpProvider();
         break;
     }
+  }
+
+  /** True once a real provider (not `NoOpProvider`) is configured — check this before calling
+   * `analyze()` if you're not certain AI analysis was actually requested. */
+  get isEnabled(): boolean {
+    return this.providerName !== 'none';
   }
 
   async analyze(

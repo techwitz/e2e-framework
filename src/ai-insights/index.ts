@@ -6,3 +6,4 @@ export * from './providers/GeminiProvider.js';
 export * from './providers/OpenAiProvider.js';
 export * from './providers/ClaudeProvider.js';
 export * from './providers/OllamaProvider.js';
+export * from './providers/NoOpProvider.js';

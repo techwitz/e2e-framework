@@ -89,7 +89,47 @@ table (each row deep-links back to that test's card):
 
 A third **Flaky History** tab shows tests that only passed after a retry, persisted across runs
 (not just the current one) via `FlakyQuarantineManager`, with tests crossing a configurable
-retry threshold flagged for quarantine.
+retry threshold flagged for quarantine. A fourth **Performance** tab lists the slowest tests in
+the run and, when AI analysis is enabled, groups failures by AI-assigned category — a lightweight
+form of failure clustering: five failures all tagged `[LOCATOR_DRIFT]` usually share one root
+cause, not five separate ones.
+
+A `summary.json` is written alongside `index.html` on every run — total/passed/failed/skipped/
+flaky counts, pass rate, the slowest tests, and the failed-tests list with AI category/root-cause
+where available — for any other tool (a CI badge, a dashboard, a bot) that wants the numbers
+without parsing HTML.
+
+### Slack / Microsoft Teams notifications
+
+Also opt-in, also off by default:
+
+```ts
+[
+  './reporters/aiHtmlReporter.ts',
+  {
+    slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
+    teamsWebhookUrl: process.env.TEAMS_WEBHOOK_URL,
+    reportUrl: process.env.AI_REPORT_URL, // link back to wherever your CI uploads the report
+    notifyOnFailureOnly: true, // default false — post every run, pass or fail
+  },
+]
+```
+
+Posts a run summary (counts, pass rate, duration, and up to 10 failing tests with their AI
+category if analysis was enabled) once the report is written. A webhook failure is logged and
+swallowed — it can never fail your test run or hide the real pass/fail result.
+
+### Optional quality gate
+
+```ts
+{ minPassRatePercent: 95 }
+```
+
+If set, `process.exitCode` is set to `1` when the run's pass rate falls below this threshold —
+independent of, and in addition to, Playwright's own exit code. Useful for a gate that should
+reject a build on "too many failures" even when the individual failures alone wouldn't otherwise
+be configured to fail CI. Omitted by default — this reporter never changes your exit code unless
+you opt in.
 
 ### Wiring it in
 
@@ -131,9 +171,12 @@ reporter: [['list'], ['./reporters/aiHtmlReporter.ts', { aiProvider: process.env
 
 ### What "AI-powered" actually means here
 
-- **Opt-in, never silent.** No API call happens unless `aiProvider` is explicitly set (or the
+- **Optional, not mandatory — because AI calls cost real money.** `AiFailureAnalyzer`'s own
+  default provider is `'none'`, which resolves to a `NoOpProvider` that throws loudly if
+  `analyze()` is ever called on it — there is no hidden fallback to a real provider if you forget
+  to set one. No API call happens unless `aiProvider` is explicitly set (or the
   `AI_REPORT_PROVIDER` env var is). A report with `aiProvider` unset is still the full dashboard
-  above — traceability, thumbnails, video, flaky history — just without the AI panel.
+  above — traceability, thumbnails, video, flaky history, performance — just without the AI panel.
 - **Bring your own key.** `AiFailureAnalyzer` already supports Gemini, OpenAI, Claude, and a fully
   local Ollama provider (zero external calls, zero cost) — see [`ai-insights/`](./src/ai-insights).
   Configure whichever one your team already has access to via that provider's own env vars (see
@@ -351,7 +394,7 @@ pnpm generate:living-docs
 | `config/` | `ConfigLoader`/`EnvConfig` — env-var-driven configuration with generic defaults |
 | `data-driven/` | CSV/Excel/JSON data providers + `zod`-validated `withData()` test wrapper |
 | `forensics/` | `HarRecorder`, `DiagnosticBundle`, `TelemetryCollector`, `PiiRedactor` — failure artifact capture with PII redaction before anything leaves the machine |
-| `ai-insights/` | Pluggable AI root-cause analysis (`AiFailureAnalyzer`) with Gemini/OpenAI/Claude/local-Ollama provider adapters |
+| `ai-insights/` | Pluggable AI root-cause analysis (`AiFailureAnalyzer`) with Gemini/OpenAI/Claude/local-Ollama provider adapters, defaulting to a real no-op provider — analysis is opt-in, never automatic |
 | `bdd-living-docs/` | `Given`/`When`/`Then` wrappers + a CLI that generates a living Markdown spec catalog from your specs |
 | `performance/` | Core Web Vitals collection, network timing, a performance-budget guard, and a k6 load-script generator |
 | `accessibility/` | Axe-core-powered WCAG 2.1 AA auditor |

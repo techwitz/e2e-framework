@@ -2,6 +2,8 @@ node_modules/
 dist/
 playwright-report/
 test-results/
+ai-html-report/
+.flaky-quarantine.json
 .env
 .env.*
 !.env.example

@@ -66,6 +66,89 @@ test('user can log in', async ({ page }) => {
 });
 ```
 
+## AI-powered HTML report
+
+Screenshots, videos, and traces sitting in separate `test-results/` folders don't help a
+developer or a QA engineer understand *why* something broke — they have to hunt for the right
+file, cross-reference it against a test ID, then read a raw stack trace themselves. `AiHtmlReporter`
+assembles everything the framework already captures into one self-contained dashboard, and —
+opt-in, using your own LLM API key — adds a root-cause summary and suggested fix per failure.
+
+![Dashboard: pass/fail counts, pass rate, and a filterable/searchable test list](./docs/screenshots/dashboard.png)
+
+Click any test to expand it in place — real screenshot thumbnail, embedded video player, a
+downloadable trace, and the full (ANSI-stripped, PII-redacted) error and stack trace:
+
+![Expanded failed-test card with screenshot, video player, and error detail](./docs/screenshots/failed-test-detail.png)
+
+A **Traceability** tab turns the `[TC-XXX-001]` convention already used throughout your specs
+into a live matrix — test ID, title, source file, tags, and pass/fail status, all in one sortable
+table (each row deep-links back to that test's card):
+
+![Traceability matrix mapping test IDs to titles, files, tags, and status](./docs/screenshots/traceability.png)
+
+A third **Flaky History** tab shows tests that only passed after a retry, persisted across runs
+(not just the current one) via `FlakyQuarantineManager`, with tests crossing a configurable
+retry threshold flagged for quarantine.
+
+### Wiring it in
+
+```ts
+// playwright.config.ts
+export default defineConfig({
+  reporter: [
+    ['list'],
+    ['html'],
+    [
+      '@open-test/playwright-core/dist/reporting/AiHtmlReporter.js',
+      {
+        outputDir: 'ai-html-report',
+        projectTitle: 'My App — Test Execution Report',
+        // Opt-in only — omit this line entirely and the report still generates in full
+        // (thumbnails, video, traceability, flaky history), just without the AI panel. No
+        // LLM call happens unless this is set.
+        aiProvider: process.env.AI_REPORT_PROVIDER, // 'gemini' | 'openai' | 'claude' | 'ollama'
+      },
+    ],
+  ],
+});
+```
+
+If your bundler/runtime can't resolve a package subpath directly (this repo's own example suite
+hits exactly that, since it consumes `core` via pnpm's `workspace:*` protocol against source, not
+a built `dist/`), add one small local file instead and point the reporter array at that:
+
+```ts
+// reporters/aiHtmlReporter.ts
+import { AiHtmlReporter } from '@open-test/playwright-core';
+export default AiHtmlReporter;
+```
+
+```ts
+// playwright.config.ts
+reporter: [['list'], ['./reporters/aiHtmlReporter.ts', { aiProvider: process.env.AI_REPORT_PROVIDER }]]
+```
+
+### What "AI-powered" actually means here
+
+- **Opt-in, never silent.** No API call happens unless `aiProvider` is explicitly set (or the
+  `AI_REPORT_PROVIDER` env var is). A report with `aiProvider` unset is still the full dashboard
+  above — traceability, thumbnails, video, flaky history — just without the AI panel.
+- **Bring your own key.** `AiFailureAnalyzer` already supports Gemini, OpenAI, Claude, and a fully
+  local Ollama provider (zero external calls, zero cost) — see [`ai-insights/`](./src/ai-insights).
+  Configure whichever one your team already has access to via that provider's own env vars (see
+  each provider file for its exact variable name).
+- **Redacted before it leaves the process.** Console logs, error messages, and stack traces are
+  passed through `PiiRedactor` before being sent to any provider — see
+  [`forensics/PiiRedactor.ts`](./src/forensics/PiiRedactor.ts).
+- **Never blocks or fails your suite.** If the analysis call errors (bad key, rate limit, network),
+  the reporter catches it and shows "AI analysis unavailable" in that test's card — it never turns
+  a real test failure into a reporter failure.
+- **Per-failure structured output**, not a free-text chat response: a category (`[PRODUCT_BUG]`,
+  `[LOCATOR_DRIFT]`, `[ENVIRONMENT_TIMEOUT]`, `[API_REGRESSION]`, `[TEST_DATA_MISMATCH]`, or
+  `[UNKNOWN_FAILURE]`), a confidence percentage, a root-cause explanation, and — where the model
+  can infer one — a suggested code fix. See [`ai-insights/types.ts`](./src/ai-insights/types.ts).
+
 ## Configuring your target application
 
 This package doesn't ship a `playwright.config.ts` — that lives in your own project, same as
@@ -273,7 +356,7 @@ pnpm generate:living-docs
 | `performance/` | Core Web Vitals collection, network timing, a performance-budget guard, and a k6 load-script generator |
 | `accessibility/` | Axe-core-powered WCAG 2.1 AA auditor |
 | `visual/` | Masked visual-regression snapshot matching |
-| `reporting/` | Structured logging, flaky-test quarantine tracking, Slack/Teams webhook notifications |
+| `reporting/` | `AiHtmlReporter` — the comprehensive HTML dashboard described above; structured logging; persistent flaky-test tracking (`FlakyQuarantineManager`); Slack/Teams webhook notifications |
 
 ## Working on the framework itself
 

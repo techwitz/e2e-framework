@@ -2,9 +2,9 @@
 
 Enterprise-grade, product-agnostic testing and performance engineering engine for [Playwright](https://playwright.dev). MIT licensed, zero paid tools, zero vendor lock-in.
 
-This package has **no knowledge of any specific application** — it's the reusable engine. If you're
-looking for the example of a real domain suite built on top of it, see `@bien/lxp-e2e` in the
-[`packages/lxp`](../lxp) directory of this repo (or your own project's equivalent).
+This package has **no knowledge of any specific application** — it's the reusable engine. Build
+your own domain suite on top of it in your own project (page objects, tasks, mocks, specs) — see
+the root [README](../../README.md) for the full pattern and worked examples.
 
 ## Install
 
@@ -85,10 +85,10 @@ await SessionManager.seedSession(page, seed);
 ## Building your own domain suite on top
 
 The intended pattern is: `core` provides the primitives, your app's own package supplies the
-domain knowledge (page objects, REST clients, business "tasks", auth-state shape). See
-`packages/lxp` in this repo for a full example — it extends `BasePage`/`BaseTask`/`BaseApiClient`/
-`BaseFactory` with Bien LXP's own pages, workflows, and API clients, and builds its own
-`createLxpRoleSeed()` on top of this package's generic `SessionManager`.
+domain knowledge — page objects extending `BasePage`, REST clients extending `BaseApiClient`,
+business "tasks" extending `BaseTask`, and your own role-seed helper built on this package's
+generic `SessionManager`/`AuthStorageSeed`. See the root [README](../../README.md) for a full
+worked example of each piece.
 
 ## Contributing
 

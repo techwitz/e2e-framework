@@ -2,62 +2,36 @@
 
 **Enterprise Playwright E2E, Data-Driven Testing (DDT), Performance & AI-Powered Testing Framework.**
 
-An opinionated but product-agnostic layer on top of [Playwright](https://playwright.dev) for teams
-who want more than raw Playwright out of the box: a Page Object / Task / Factory architecture,
-CSV/Excel/JSON-driven data-driven testing, Core Web Vitals & network performance budgets,
-axe-core accessibility auditing, visual regression, HAR/PII-redacted failure forensics, optional
-AI-assisted failure triage, and a BDD-style `Given`/`When`/`Then` wrapper that doubles as living
-documentation. MIT licensed, zero paid tools, zero vendor lock-in.
+A product-agnostic layer on top of [Playwright](https://playwright.dev) for teams who want more
+than raw Playwright out of the box: a Page Object / Task / Factory architecture, CSV/Excel/JSON-
+driven data-driven testing, Core Web Vitals & network performance budgets, axe-core accessibility
+auditing, visual regression, HAR/PII-redacted failure forensics, optional AI-assisted failure
+triage, and a BDD-style `Given`/`When`/`Then` wrapper that doubles as living documentation. MIT
+licensed, zero paid tools, zero vendor lock-in.
 
-## Architecture
-
-This is a two-package pnpm workspace:
-
-| Package | Name | What it is |
-|---|---|---|
-| [`packages/core`](./packages/core) | `@open-test/playwright-core` | **The framework.** Product-agnostic — it has zero knowledge of any specific application. This is what you install and build your own test suite on top of. |
-| [`packages/lxp`](./packages/lxp) | `@bien/lxp-e2e` | **A full, real-world example domain suite** built on `packages/core`, testing a real learning-platform application (page objects, tasks, mocks, and ~25 tagged smoke/regression/DDT/performance/accessibility/visual specs). Read it to see the intended pattern in practice — you are not expected to reuse this package directly unless you happen to be testing that exact application. |
-
-The pattern: `core` provides primitives (`BasePage`, `BaseTask`, `BaseApiClient`, `BaseFactory`,
-session seeding, data-driven test wrappers, performance/accessibility/visual tooling). Your own
-domain package supplies the knowledge specific to *your* app — its pages, its API clients, its
-auth-storage shape, its business workflows — exactly the way `packages/lxp` does here.
-
-A CI job in this repo (see [`.github/workflows`](./.github/workflows) if present, or your fork's
-equivalent) can enforce that `packages/core` never imports anything from `packages/lxp` or any
-other product-specific code — the one hard rule that keeps the framework reusable.
+This repo contains exactly one package: [`packages/core`](./packages/core)
+(`@open-test/playwright-core`). It has **zero knowledge of any specific application** — nothing
+in here is tied to one product, one auth scheme, or one UI. You install it and build your own
+domain-specific test suite (page objects, tasks, mocks, specs) in your own project, the same way
+you'd build on top of any other test framework.
 
 ## Requirements
 
 - Node.js >= 20
-- [pnpm](https://pnpm.io/) (workspace uses `pnpm-workspace.yaml`)
-- A running instance of the application(s) you're testing, reachable over HTTP
+- [pnpm](https://pnpm.io/), npm, or yarn
+- A running instance of the application you're testing, reachable over HTTP
 
-## Setup
-
-```bash
-git clone https://github.com/techwitz/e2e-framework.git
-cd e2e-framework
-pnpm install
-npx playwright install --with-deps
-```
-
-Typecheck everything:
-
-```bash
-pnpm typecheck
-```
-
-## Using the framework in your own project
-
-You don't need this whole repo — `packages/core` is a standalone, publishable npm package.
+## Install
 
 ```bash
 npm install --save-dev @open-test/playwright-core @playwright/test
 # or: pnpm add -D @open-test/playwright-core @playwright/test
+npx playwright install --with-deps
 ```
 
-Then build page objects and tests on top of it. A minimal example:
+## Quickstart
+
+A minimal page object + test, using `BasePage`:
 
 ```ts
 // pages/LoginPage.ts
@@ -94,20 +68,10 @@ test('user can log in', async ({ page }) => {
 });
 ```
 
-See the full quickstart, module reference, and more examples (session seeding, DDT, BDD steps,
-performance budgets, accessibility audits) in **[`packages/core`'s own README](./packages/core/README.md)**
-— that's the canonical reference for the framework's API.
+## Configuring your target application
 
-## Working in this repo (the example suite)
-
-If you're here to read or extend the example domain suite (`packages/lxp`), or to use this repo as
-a template for your own two-package layout:
-
-### Configure your target application
-
-Playwright config lives per domain-package (see [`packages/lxp/playwright.config.ts`](./packages/lxp/playwright.config.ts)
-for a real, fully-worked example — including a two-app/two-`webServer` setup, per-project tagging,
-and environment-driven base URLs). At minimum you'll want:
+This package doesn't ship a `playwright.config.ts` — that lives in your own project, same as
+with vanilla Playwright:
 
 ```ts
 // playwright.config.ts
@@ -125,42 +89,76 @@ export default defineConfig({
 });
 ```
 
-Common environment variables used across this repo's config and fixtures:
+Keep your app's own real defaults (base URL, API URL, persona credentials, etc.) in one small
+config module rather than scattering `process.env.X ?? 'hardcoded-value'` across specs —
+`ConfigLoader` (below) gives you an env-var-driven starting point.
 
-| Variable | Purpose | Default (example suite) |
-|---|---|---|
-| `BASE_URL` | Base URL of the application under test | `http://127.0.0.1:35173` |
-| `API_URL` | Base URL of the backend API (if your app proxies/calls one directly in tests) | `http://127.0.0.1:30080` |
-| `CI` | Set by CI runners; flips retries/worker-count/report-verbosity to CI-appropriate values | unset locally |
-| `E2E_WEBHOOK_URL` | If set, `WebhookNotifier` posts failure/run-summary events here (Slack/Teams-compatible payload) | unset (no-op) |
+## Building your own test suite on top
 
-Your own domain package should keep its real defaults in one small config module (see
-[`packages/lxp/src/config/lxpEnvironments.ts`](./packages/lxp/src/config/lxpEnvironments.ts) for the pattern) rather than
-scattering `process.env.X ?? 'hardcoded-value'` across specs.
+### 1. Page objects
 
-### Writing a test
-
-1. **Page object** — extend `BasePage`, define locators as readonly fields, define user-facing
-   actions as async methods (not raw Playwright calls in your spec files). See
-   [`packages/lxp/src/pages`](./packages/lxp/src/pages) for ~20 real examples.
-2. **Task** (optional) — for a multi-step flow reused across many specs (e.g. "log in as persona
-   X and land on route Y"), extend `BaseTask` and wire it into a fixture. See
-   [`packages/lxp/src/tasks`](./packages/lxp/src/tasks) and
-   [`packages/lxp/src/fixtures/lxpTest.ts`](./packages/lxp/src/fixtures/lxpTest.ts).
-3. **Mocks** (optional) — if you want deterministic tests independent of a live backend, install
-   `page.route()` interceptors in one place and call that from your fixtures. See
-   [`packages/lxp/src/mocks/LxpMockProvider.ts`](./packages/lxp/src/mocks/LxpMockProvider.ts).
-4. **Spec file** — use `Given`/`When`/`Then`/`And` from `@open-test/playwright-core` to structure
-   the test as readable BDD steps; these are also what the living-documentation generator parses:
+Extend `BasePage`. Locators as readonly fields, user-facing actions as async methods — keep raw
+Playwright calls out of your spec files.
 
 ```ts
-import { test, expect } from '../src/fixtures/myAppTest.js';
+export class DashboardPage extends BasePage {
+  constructor(page: Page) {
+    super(page, '/dashboard');
+  }
+  readonly welcomeBanner = this.page.getByRole('heading', { name: /welcome/i });
+}
+```
+
+### 2. Tasks (optional)
+
+For a multi-step flow reused across many specs (e.g. "log in as role X and land on route Y"),
+extend `BaseTask` and wire it into a Playwright fixture:
+
+```ts
+import { BaseTask } from '@open-test/playwright-core';
+
+export interface LoginAsInput { role: 'admin' | 'user'; targetPath?: string }
+
+export class LoginAsTask extends BaseTask<LoginAsInput, void> {
+  async performAs({ role, targetPath }: LoginAsInput): Promise<void> {
+    // seed a session (see "Seeding an authenticated session" below), then navigate
+  }
+}
+```
+
+```ts
+// fixtures/myAppTest.ts
+import { test as base } from '@playwright/test';
+import { LoginAsTask } from '../tasks/LoginAsTask';
+
+export const test = base.extend<{ loginAs: (role: 'admin' | 'user', path?: string) => Promise<void> }>({
+  loginAs: async ({ page }, use) => {
+    const task = new LoginAsTask(page);
+    await use((role, targetPath) => task.performAs({ role, targetPath }));
+  },
+});
+export { expect } from '@playwright/test';
+```
+
+### 3. Mocks (optional)
+
+If you want deterministic tests independent of a live backend, install `page.route()`
+interceptors in one place and call that from your fixtures — one function your whole suite reuses,
+not ad-hoc mocking scattered across specs.
+
+### 4. Spec files — BDD-style steps
+
+Use `Given`/`When`/`Then`/`And` to structure the test as readable steps; these are also what the
+living-documentation generator (below) parses into a spec catalog:
+
+```ts
+import { test, expect } from '../fixtures/myAppTest.js';
 import { Given, When, Then } from '@open-test/playwright-core';
 
 test.describe('Checkout @regression @cart', () => {
   test('[TC-CART-001] User can complete checkout with a saved card', async ({ page, loginAs }) => {
     await Given('a returning customer with items in their cart', async () => {
-      await loginAs('returningCustomer', '/cart');
+      await loginAs('user', '/cart');
     });
 
     await When('they submit checkout with their saved payment method', async () => {
@@ -174,14 +172,17 @@ test.describe('Checkout @regression @cart', () => {
 });
 ```
 
-5. **Tag it.** Tags in the test title (`@smoke`, `@regression`, `@ddt`, `@perf`, `@accessibility`,
-   `@visual`) are how the `test:*` scripts below filter what runs. Add your own tags freely —
-   they're just `--grep`-matched substrings.
+### 5. Tag your tests
 
-### Data-driven tests (CSV / Excel / JSON)
+Tags in the test title (e.g. `@smoke`, `@regression`, `@ddt`, `@perf`, `@accessibility`,
+`@visual`) are just substrings `playwright test --grep` matches — invent whatever tag vocabulary
+fits your project and wire matching `npm`/`pnpm` scripts to them (`"test:smoke": "playwright test
+--grep @smoke"`, etc.).
+
+## Data-driven tests (CSV / Excel / JSON)
 
 ```ts
-import { test } from '../src/fixtures/myAppTest.js';
+import { test } from '../fixtures/myAppTest.js';
 import { withData } from '@open-test/playwright-core';
 import { z } from 'zod';
 import path from 'node:path';
@@ -189,47 +190,19 @@ import path from 'node:path';
 const RowSchema = z.object({ email: z.string(), role: z.string(), expectedAccess: z.string() });
 type Row = z.infer<typeof RowSchema>;
 
-withData<Row>(path.resolve(process.cwd(), 'src/data/users.csv'), {}, RowSchema).test(
+withData<Row>(path.resolve(process.cwd(), 'data/users.csv'), {}, RowSchema).test(
   'Verify access for role',
   async ({ page, loginAs }, row) => {
-    // one sub-test per CSV row, run sequentially against the same page
+    // one sub-test per row, run sequentially against the same page
   },
   test,
 );
 ```
 
-CSV, Excel (`.xlsx`, pass `{ sheetName }`), and JSON are all supported via the same `withData()`
+CSV, Excel (`.xlsx` — pass `{ sheetName }`), and JSON are all supported via the same `withData()`
 API — see [`packages/core/src/data-driven`](./packages/core/src/data-driven).
 
-### Running tests
-
-From a domain package directory (e.g. `packages/lxp`):
-
-```bash
-pnpm test              # everything
-pnpm test:smoke        # @smoke only — fast availability gate
-pnpm test:regression   # @regression only
-pnpm test:ddt          # @ddt only
-pnpm test:perf         # @perf only — Core Web Vitals & network budgets
-pnpm test:a11y         # @accessibility only — axe-core WCAG audit
-pnpm test:visual       # @visual only — screenshot regression
-```
-
-Or target a specific file/line directly with the Playwright CLI: `npx playwright test path/to.spec.ts:42`.
-
-### Generating living documentation
-
-`packages/core`'s BDD parser can turn your `Given`/`When`/`Then` specs into a Markdown spec
-catalog — useful as executable, always-up-to-date documentation for stakeholders who don't read
-code:
-
-```bash
-pnpm --dir packages/core generate:living-docs
-# or, fully explicit:
-npx tsx packages/core/src/bdd-living-docs/cli.ts <specDir> <outputPath> --title="My Project"
-```
-
-### Performance budgets & accessibility
+## Performance budgets & accessibility
 
 ```ts
 import { PerformanceBudgetGuard, CoreWebVitalsCollector } from '@open-test/playwright-core';
@@ -245,9 +218,9 @@ const violations = await A11yAuditor.audit(page, { tags: ['wcag2a', 'wcag2aa'] }
 expect(violations).toHaveLength(0);
 ```
 
-### Seeding an authenticated session (skip the login UI)
+## Seeding an authenticated session (skip the login UI)
 
-`core` doesn't know your app's storage shape — you describe it once, `core` handles writing it
+The framework doesn't know your app's storage shape — you describe it once, it handles writing it
 before the page's first script runs:
 
 ```ts
@@ -262,33 +235,63 @@ await SessionManager.seedSession(page, seed);
 ```
 
 If a later test needs to simulate that session expiring/being cleared and reloading, use
-`SessionManager.clearSession(page, storageKeys)` rather than a plain
-`localStorage.removeItem()` — `seedSession()`'s write happens via a permanent `page.addInitScript()`
-that Playwright has no API to unregister, so a bare removal gets silently re-written on the very
-next reload. `clearSession()` handles this correctly (see `packages/core/src/auth/StorageStateProvider.ts`).
+`SessionManager.clearSession(page, storageKeys)` rather than a plain `localStorage.removeItem()`
+— `seedSession()`'s write happens via a permanent `page.addInitScript()` that Playwright has no
+API to unregister, so a bare removal gets silently re-written on the very next reload.
+`clearSession()` handles this correctly — see
+[`packages/core/src/auth/StorageStateProvider.ts`](./packages/core/src/auth/StorageStateProvider.ts).
 
-## CI
+## Generating living documentation
 
-Wire up whatever CI system you use to run, at minimum:
+The BDD parser can turn your `Given`/`When`/`Then` specs into a Markdown spec catalog — useful as
+executable, always-up-to-date documentation for stakeholders who don't read code:
 
 ```bash
-pnpm --dir packages/core typecheck
-pnpm --dir packages/lxp typecheck   # or your own domain package
-pnpm --dir packages/lxp test:smoke  # fast gate on every PR
+npx tsx node_modules/@open-test/playwright-core/src/bdd-living-docs/cli.ts <specDir> <outputPath> --title="My Project"
 ```
 
-Run `test:regression`/`test:ddt`/`test:a11y`/`test:perf`/`test:visual` on a schedule or on merge
-to your main branch — they're slower and (for the perf/DDT suites especially) more sensitive to
-host resource contention, so they're better suited to a nightly job than a per-PR gate.
+Or, if you've cloned this repo directly to work on the framework itself:
+
+```bash
+pnpm --dir packages/core generate:living-docs
+```
+
+## What's in `packages/core`
+
+| Module | What it does |
+|---|---|
+| `base/` | `BasePage`, `BaseComponent`, `BaseTask`, `BaseApiClient`, `BaseFactory` — the abstract classes everything else builds on |
+| `auth/` | Generic session seeding (`SessionManager`, `StorageStateProvider`, `JwtHelper`) — no product-specific storage keys or state shape |
+| `config/` | `ConfigLoader`/`EnvConfig` — env-var-driven configuration with generic defaults |
+| `data-driven/` | CSV/Excel/JSON data providers + `zod`-validated `withData()` test wrapper |
+| `forensics/` | `HarRecorder`, `DiagnosticBundle`, `TelemetryCollector`, `PiiRedactor` — failure artifact capture with PII redaction before anything leaves the machine |
+| `ai-insights/` | Pluggable AI root-cause analysis (`AiFailureAnalyzer`) with Gemini/OpenAI/Claude/local-Ollama provider adapters |
+| `bdd-living-docs/` | `Given`/`When`/`Then` wrappers + a CLI that generates a living Markdown spec catalog from your specs |
+| `performance/` | Core Web Vitals collection, network timing, a performance-budget guard, and a k6 load-script generator |
+| `accessibility/` | Axe-core-powered WCAG 2.1 AA auditor |
+| `visual/` | Masked visual-regression snapshot matching |
+| `reporting/` | Structured logging, flaky-test quarantine tracking, Slack/Teams webhook notifications |
+
+## Working on the framework itself
+
+```bash
+git clone https://github.com/techwitz/e2e-framework.git
+cd e2e-framework
+pnpm install
+pnpm typecheck
+```
+
+CI (yours, or a fork's) should at minimum run `pnpm --dir packages/core typecheck` and a grep-based
+check that `packages/core/src` never imports anything product-specific — that's the one hard rule
+that keeps this reusable. See [CONTRIBUTING.md](./packages/core/CONTRIBUTING.md).
 
 ## Package docs
 
-- [`packages/core` README](./packages/core/README.md) — the canonical framework reference: install,
-  quickstart, and a full module-by-module breakdown
-- [`packages/core` CONTRIBUTING](./packages/core/CONTRIBUTING.md) — the one hard rule (no
-  product-specific coupling in `core`) plus the self-check command
+- [`packages/core` README](./packages/core/README.md) — the same install/quickstart content as
+  above, kept alongside the package so it travels correctly if published to npm
+- [`packages/core` CONTRIBUTING](./packages/core/CONTRIBUTING.md) — the no-product-coupling rule
+  plus the self-check command
 
 ## License
 
-MIT — see [`packages/core/LICENSE`](./packages/core/LICENSE). `packages/lxp` is provided as a
-reference example under the same terms.
+MIT — see [LICENSE](./LICENSE).

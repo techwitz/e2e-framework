@@ -1,5 +1,0 @@
-userCode,email,role,targetRoute,expectedAccess
-USR-E2E-001,learner-001@example.test,LEARNER,/#/learner/home,ALLOW
-USR-E2E-002,learner-002@example.test,LEARNER,/#/admin/users,DENY
-USR-E2E-003,manager-001@example.test,LEARNING_MANAGER,/#/manager/team-dashboard,ALLOW
-USR-E2E-004,admin-001@example.test,WORKSPACE_ADMIN,/#/learner/home,ALLOW

@@ -8,8 +8,8 @@ Playwright engine — the single rule that matters most for a PR to be accepted:
 Nothing in `src/` may import or hardcode knowledge of any specific application — no product/company
 names, no hardcoded storage keys, ports, or URLs beyond generic localhost defaults, no assumptions
 about a particular app's state shape. If your use case needs app-specific behavior, it belongs in
-your own domain package built on top of this one (see this repo's `packages/lxp` for an example of
-that pattern), not in `core`.
+your own domain package built on top of this one (see the root README's worked examples), not in
+`core`.
 
 A quick self-check before opening a PR:
 

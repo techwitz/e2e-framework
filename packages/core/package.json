@@ -38,7 +38,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "generate:living-docs": "tsx src/bdd-living-docs/cli.ts ../lxp ../lxp/living-docs/TEST_SPECIFICATIONS.md --title=\"Executable Living Test Specifications\""
+    "generate:living-docs": "tsx src/bdd-living-docs/cli.ts ./specs ./living-docs/TEST_SPECIFICATIONS.md --title=\"Executable Living Test Specifications\""
   },
   "dependencies": {
     "@axe-core/playwright": "^4.10.2",

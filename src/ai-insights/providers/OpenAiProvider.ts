@@ -4,7 +4,13 @@ import { FailureClassifier } from '../FailureClassifier.js';
 import { BugTicketGenerator } from '../BugTicketGenerator.js';
 
 export class OpenAiProvider implements ILlmProvider {
-  constructor(private readonly apiKey = process.env.OPENAI_API_KEY) {}
+  /**
+   * `apiKey` must be passed in explicitly by the consuming application — this framework never
+   * reads any AI-vendor env var (or secrets file) itself. Read your own `OPENAI_API_KEY` (or
+   * whatever your app calls it) in your own config and pass the value through
+   * `AiHtmlReporterOptions.aiApiKey` / `AiFailureAnalyzer`'s constructor.
+   */
+  constructor(private readonly apiKey?: string) {}
 
   async analyzeFailure(
     telemetry: DiagnosticTelemetry,

@@ -4,9 +4,16 @@ import { FailureClassifier } from '../FailureClassifier.js';
 import { BugTicketGenerator } from '../BugTicketGenerator.js';
 
 export class OllamaProvider implements ILlmProvider {
+  /**
+   * `hostUrl`/`model` must be passed in explicitly by the consuming application if you want
+   * anything other than these generic local defaults — this framework never reads an
+   * `OLLAMA_HOST`/`OLLAMA_MODEL` env var (or any config file) itself. Read your own env var in
+   * your own config and pass the value through `AiHtmlReporterOptions.aiOllamaHost`/
+   * `aiOllamaModel` / `AiFailureAnalyzer`'s constructor.
+   */
   constructor(
-    private readonly hostUrl = process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434',
-    private readonly model = process.env.OLLAMA_MODEL ?? 'llama3',
+    private readonly hostUrl = 'http://127.0.0.1:11434',
+    private readonly model = 'llama3',
   ) {}
 
   async analyzeFailure(

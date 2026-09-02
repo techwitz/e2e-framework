@@ -77,9 +77,32 @@ opt-in, using your own LLM API key — adds a root-cause summary and suggested f
 ![Dashboard: pass/fail counts, pass rate, and a filterable/searchable test list](./docs/screenshots/dashboard.png)
 
 Click any test to expand it in place — real screenshot thumbnail, embedded video player, a
-downloadable trace, and the full (ANSI-stripped, PII-redacted) error and stack trace:
+downloadable trace, the full (ANSI-stripped, PII-redacted) error and stack trace, the **page URL
+at the moment of failure**, and a color-coded **breadcrumb trail** (console errors/warnings,
+uncaught page errors, failed requests, and 4xx/5xx responses in the run-up to the failure) — plus
+a one-click **Copy details** button that puts a plain-text summary of all of it on your clipboard,
+ready to paste into a bug report or a chat message:
 
-![Expanded failed-test card with screenshot, video player, and error detail](./docs/screenshots/failed-test-detail.png)
+![Expanded failed-test card with screenshot, video player, page URL, breadcrumb trail, and a copy-details button](./docs/screenshots/failed-test-detail.png)
+
+The page URL and breadcrumb trail come from `captureFailureDiagnostics()` — wire it in as an
+auto-fixture and it silently attaches this data to any non-passing test, with nothing to opt into
+per test:
+
+```ts
+// fixtures.ts
+import { test as base } from '@playwright/test';
+import { captureFailureDiagnostics } from '@open-test/playwright-core';
+
+export const test = base.extend<{ _diagnosticsCapture: void }>({
+  _diagnosticsCapture: [
+    async ({ page }, use, testInfo) => {
+      await captureFailureDiagnostics(page, testInfo, async () => { await use(); });
+    },
+    { auto: true },
+  ],
+});
+```
 
 A **Traceability** tab turns the `[TC-XXX-001]` convention already used throughout your specs
 into a live matrix — test ID, title, source file, tags, and pass/fail status, all in one sortable
@@ -177,10 +200,26 @@ reporter: [['list'], ['./reporters/aiHtmlReporter.ts', { aiProvider: process.env
   to set one. No API call happens unless `aiProvider` is explicitly set (or the
   `AI_REPORT_PROVIDER` env var is). A report with `aiProvider` unset is still the full dashboard
   above — traceability, thumbnails, video, flaky history, performance — just without the AI panel.
-- **Bring your own key.** `AiFailureAnalyzer` already supports Gemini, OpenAI, Claude, and a fully
-  local Ollama provider (zero external calls, zero cost) — see [`ai-insights/`](./src/ai-insights).
-  Configure whichever one your team already has access to via that provider's own env vars (see
-  each provider file for its exact variable name).
+- **Bring your own key — and your own env var name.** `AiFailureAnalyzer` already supports Gemini,
+  OpenAI, Claude, and a fully local Ollama provider (zero external calls, zero cost) — see
+  [`ai-insights/`](./src/ai-insights). The framework itself never reads `GEMINI_API_KEY`/
+  `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`OLLAMA_HOST` or any other AI-vendor env var (or secrets
+  file) — that's your application's decision, not the framework's. Resolve the credential however
+  your app already does (an env var, a secrets manager, a `.env` file) and pass the resolved value
+  through `aiApiKey` (and `aiOllamaHost`/`aiOllamaModel` for Ollama):
+  ```ts
+  [
+    './reporters/aiHtmlReporter.ts',
+    {
+      aiProvider: process.env.AI_REPORT_PROVIDER,
+      aiApiKey:
+        process.env.AI_REPORT_PROVIDER === 'claude' ? process.env.ANTHROPIC_API_KEY :
+        process.env.AI_REPORT_PROVIDER === 'gemini' ? process.env.GEMINI_API_KEY :
+        process.env.AI_REPORT_PROVIDER === 'openai' ? process.env.OPENAI_API_KEY :
+        undefined,
+    },
+  ]
+  ```
 - **Redacted before it leaves the process.** Console logs, error messages, and stack traces are
   passed through `PiiRedactor` before being sent to any provider — see
   [`forensics/PiiRedactor.ts`](./src/forensics/PiiRedactor.ts).
@@ -216,6 +255,43 @@ export default defineConfig({
 Keep your app's own real defaults (base URL, API URL, persona credentials, etc.) in one small
 config module rather than scattering `process.env.X ?? 'hardcoded-value'` across specs —
 `ConfigLoader` (below) gives you an env-var-driven starting point.
+
+## Cross-browser & responsive/mobile testing
+
+`expandProjectsAcrossDevices()` turns a small set of "real" Playwright projects (one per app,
+base URL, or tag filter you actually need) into the full cross-browser + device matrix, without
+hand-duplicating every project definition — and without slowing down your default local run,
+since nothing is expanded unless you ask for it:
+
+```ts
+// playwright.config.ts
+import { defineConfig, devices } from '@playwright/test';
+import { expandProjectsAcrossDevices, type BrowserEngine } from '@open-test/playwright-core';
+
+const extraBrowsers = (process.env.E2E_BROWSERS ?? '').split(',').filter(Boolean) as BrowserEngine[];
+const extraDevices = (process.env.E2E_DEVICES ?? '').split(',').filter(Boolean);
+
+export default defineConfig({
+  projects: expandProjectsAcrossDevices(
+    [{ name: 'chromium', use: { ...devices['Desktop Chrome'], baseURL: process.env.BASE_URL } }],
+    { browsers: extraBrowsers, devices: extraDevices },
+  ),
+});
+```
+
+- **`playwright test`** — just the base project(s) you defined, exactly like today. Nothing
+  changes unless you set an env var.
+- **`E2E_BROWSERS=firefox,webkit playwright test`** — every base project also runs on Firefox and
+  WebKit (`chromium-firefox`, `chromium-webkit`, …).
+- **`E2E_DEVICES="iPhone 14,Pixel 7" playwright test`** — every base project also runs against
+  those emulated devices (`chromium-iphone-14`, `chromium-pixel-7`, …) — any device name from
+  Playwright's own `devices` export works.
+- **`playwright test --project=chromium-webkit`** (or any other generated project name) — target
+  one specific browser/device directly, using Playwright's own `--project` flag.
+
+Mix both env vars to get the full grid in one run. A base project's own `grep`/`grepInvert`/
+`testMatch`/etc. carry through to every generated variant, so per-app tag filtering (like the
+admin-vs-learner split in this repo's own example suite) keeps working across the whole matrix.
 
 ## Building your own test suite on top
 
@@ -391,10 +467,10 @@ pnpm generate:living-docs
 |---|---|
 | `base/` | `BasePage`, `BaseComponent`, `BaseTask`, `BaseApiClient`, `BaseFactory` — the abstract classes everything else builds on |
 | `auth/` | Generic session seeding (`SessionManager`, `StorageStateProvider`, `JwtHelper`) — no product-specific storage keys or state shape |
-| `config/` | `ConfigLoader`/`EnvConfig` — env-var-driven configuration with generic defaults |
+| `config/` | `ConfigLoader`/`EnvConfig` — env-var-driven configuration with generic defaults; `expandProjectsAcrossDevices` for opt-in cross-browser/responsive-device project matrices |
 | `data-driven/` | CSV/Excel/JSON data providers + `zod`-validated `withData()` test wrapper |
-| `forensics/` | `HarRecorder`, `DiagnosticBundle`, `TelemetryCollector`, `PiiRedactor` — failure artifact capture with PII redaction before anything leaves the machine |
-| `ai-insights/` | Pluggable AI root-cause analysis (`AiFailureAnalyzer`) with Gemini/OpenAI/Claude/local-Ollama provider adapters, defaulting to a real no-op provider — analysis is opt-in, never automatic |
+| `forensics/` | `HarRecorder`, `DiagnosticBundle`, `TelemetryCollector`, `PiiRedactor`, `captureFailureDiagnostics` (page URL + console/network breadcrumb trail on failure) — failure artifact capture with PII redaction before anything leaves the machine |
+| `ai-insights/` | Pluggable AI root-cause analysis (`AiFailureAnalyzer`) with Gemini/OpenAI/Claude/local-Ollama provider adapters, defaulting to a real no-op provider — analysis is opt-in, never automatic, and the framework never reads an AI-vendor env var itself; you pass the resolved credential in |
 | `bdd-living-docs/` | `Given`/`When`/`Then` wrappers + a CLI that generates a living Markdown spec catalog from your specs |
 | `performance/` | Core Web Vitals collection, network timing, a performance-budget guard, and a k6 load-script generator |
 | `accessibility/` | Axe-core-powered WCAG 2.1 AA auditor |

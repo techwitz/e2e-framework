@@ -9,6 +9,7 @@ import type {
   FullResult,
 } from '@playwright/test/reporter';
 import { AiFailureAnalyzer, type AiProviderName } from '../ai-insights/AiFailureAnalyzer.js';
+import type { AiProviderOptions } from '../ai-insights/AiFailureAnalyzer.js';
 import type { AiAnalysisResult } from '../ai-insights/types.js';
 import type { DiagnosticTelemetry } from '../forensics/types.js';
 import { PiiRedactor } from '../forensics/PiiRedactor.js';
@@ -35,6 +36,20 @@ export interface AiHtmlReporterOptions {
    * never makes silent paid API calls).
    */
   aiProvider?: AiReportProvider;
+  /**
+   * API key for the selected `aiProvider` (gemini/openai/claude). This reporter never reads
+   * `GEMINI_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` or any other AI-vendor env var (or
+   * secrets file) itself — resolve the credential from your own application's env var or
+   * secrets file and pass the value here. Not needed for `aiProvider: 'none'`/`'ollama'`.
+   */
+  aiApiKey?: string;
+  /** Ollama server URL, only used when `aiProvider: 'ollama'`. Defaults to
+   * `http://127.0.0.1:11434` if not given — read your own env var/config and pass it here if
+   * you need a different host. */
+  aiOllamaHost?: string;
+  /** Ollama model name, only used when `aiProvider: 'ollama'`. Defaults to `llama3` if not
+   * given. */
+  aiOllamaModel?: string;
   /**
    * Title shown in the report header. Defaults to `process.env.AI_REPORT_PROJECT_TITLE`, or
    * 'TechWitz E2E — Test Execution Report' if that's unset — the consuming project should set
@@ -159,7 +174,12 @@ export class AiHtmlReporter implements Reporter {
     // to 'none' above, and the analyzer is only ever constructed when a real provider was
     // explicitly named — no code path here can silently start making AI calls.
     if (aiProvider !== 'none') {
-      this.analyzer = new AiFailureAnalyzer(aiProvider);
+      const providerOptions: AiProviderOptions = {
+        apiKey: options.aiApiKey,
+        ollamaHost: options.aiOllamaHost,
+        ollamaModel: options.aiOllamaModel,
+      };
+      this.analyzer = new AiFailureAnalyzer(aiProvider, providerOptions);
     }
 
     FlakyQuarantineManager.configure(

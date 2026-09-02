@@ -1,8 +1,9 @@
 {
-  "name": "bien-lxp-enterprise-tests",
+  "name": "e2e-framework",
   "version": "1.0.0",
   "private": true,
-  "description": "Bien Enterprise Testing Platform (Playwright E2E, DDT, Performance & Core Framework)",
+  "license": "MIT",
+  "description": "Enterprise Playwright E2E, DDT, Performance & AI-Powered Testing Framework",
   "scripts": {
     "test": "pnpm --dir packages/lxp test",
     "test:smoke": "pnpm --dir packages/lxp test:smoke",
@@ -10,6 +11,7 @@
     "test:ddt": "pnpm --dir packages/lxp test:ddt",
     "test:perf": "pnpm --dir packages/lxp test:perf",
     "test:a11y": "pnpm --dir packages/lxp test:a11y",
+    "test:visual": "pnpm --dir packages/lxp test:visual",
     "generate:living-docs": "pnpm --dir packages/core generate:living-docs",
     "typecheck": "pnpm --dir packages/core typecheck && pnpm --dir packages/lxp typecheck"
   }

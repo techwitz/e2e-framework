@@ -4,13 +4,14 @@
   "description": "Enterprise-grade, agnostic, open-source testing & performance engineering engine for Playwright",
   "license": "MIT",
   "author": "open-test contributors",
-  "homepage": "https://github.com/open-test/playwright-core#readme",
+  "homepage": "https://github.com/techwitz/e2e-framework/tree/main/packages/core#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/open-test/playwright-core.git"
+    "url": "https://github.com/techwitz/e2e-framework.git",
+    "directory": "packages/core"
   },
   "bugs": {
-    "url": "https://github.com/open-test/playwright-core/issues"
+    "url": "https://github.com/techwitz/e2e-framework/issues"
   },
   "keywords": [
     "playwright",
@@ -37,7 +38,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "generate:living-docs": "tsx src/bdd-living-docs/cli.ts ../lxp ../../../docs/living-documentation/LXP_TEST_SPECIFICATIONS.md --title=\"Bien LXP Executable Living Test Specifications\""
+    "generate:living-docs": "tsx src/bdd-living-docs/cli.ts ../lxp ../lxp/living-docs/TEST_SPECIFICATIONS.md --title=\"Executable Living Test Specifications\""
   },
   "dependencies": {
     "@axe-core/playwright": "^4.10.2",

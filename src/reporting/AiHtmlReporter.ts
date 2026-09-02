@@ -35,7 +35,11 @@ export interface AiHtmlReporterOptions {
    * never makes silent paid API calls).
    */
   aiProvider?: AiReportProvider;
-  /** Title shown in the report header. Default: 'Test Execution Report'. */
+  /**
+   * Title shown in the report header. Defaults to `process.env.AI_REPORT_PROJECT_TITLE`, or
+   * 'TechWitz E2E — Test Execution Report' if that's unset — the consuming project should set
+   * one or the other so the report reads as theirs, not the framework's own placeholder name.
+   */
   projectTitle?: string;
   /** Regex used to extract a traceability ID from the test title. Default matches `[TC-XXX-001]`. */
   testIdPattern?: RegExp;
@@ -138,7 +142,8 @@ export class AiHtmlReporter implements Reporter {
     this.options = {
       outputDir: options.outputDir ?? 'ai-html-report',
       outputFile: options.outputFile ?? 'index.html',
-      projectTitle: options.projectTitle ?? 'Test Execution Report',
+      projectTitle:
+        options.projectTitle ?? process.env.AI_REPORT_PROJECT_TITLE ?? 'TechWitz E2E — Test Execution Report',
       testIdPattern: options.testIdPattern ?? /\[(TC-[A-Z]+-\d+)\]/,
       aiProvider,
       slackWebhookUrl: options.slackWebhookUrl ?? process.env.SLACK_WEBHOOK_URL,

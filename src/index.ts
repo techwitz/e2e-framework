@@ -5,6 +5,7 @@ export * from './data-driven/index.js';
 export * from './forensics/index.js';
 export * from './ai-insights/index.js';
 export * from './bdd-living-docs/index.js';
+export * from './bdd/index.js';
 export * from './auth/index.js';
 export * from './performance/index.js';
 export * from './accessibility/index.js';

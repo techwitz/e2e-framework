@@ -47,6 +47,7 @@
     "exceljs": "^4.4.0",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",
+    "playwright-bdd": "^9.2.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {

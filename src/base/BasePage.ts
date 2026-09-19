@@ -29,6 +29,15 @@ export abstract class BasePage {
     await this.page.waitForLoadState('domcontentloaded');
   }
 
+  /**
+   * Waits for the page's `main`/`role="main"` landmark to be visible — the signal that a
+   * client-rendered route has actually mounted its content, not just that the initial HTML
+   * document loaded (which `waitForReady`/`navigate` alone only guarantee).
+   */
+  async waitForMainLandmark(timeout = 10_000): Promise<void> {
+    await expect(this.page.getByRole('main').first()).toBeVisible({ timeout });
+  }
+
   async waitForSpinnerToDisappear(timeout = 10_000): Promise<void> {
     if (await this.loadingSpinner.first().isVisible().catch(() => false)) {
       await expect(this.loadingSpinner.first()).toBeHidden({ timeout });

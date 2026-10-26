@@ -54,7 +54,7 @@ export class A11yAuditor {
       const summary = blocking
         .map(
           (v: AxeViolation) =>
-            `[${(v.impact ?? 'unknown').toUpperCase()}] ${v.id}: ${v.help} (${v.nodes.length} nodes)`,
+            `[${(v.impact ?? 'unknown').toUpperCase()}] ${v.id}: ${v.help} (${v.nodes.length} nodes)${describeNodes(v)}`,
         )
         .join('\n');
       throw new Error(`[A11yAuditor] WCAG Violations found:\n${summary}`);
@@ -69,3 +69,9 @@ export class A11yAuditor {
   }
 }
 
+
+/** The first few failing elements by selector, so a failure can be traced without opening the trace. */
+function describeNodes(violation: AxeViolation): string {
+  const targets = violation.nodes.slice(0, 5).map((node) => node.target.join(' '));
+  return targets.length > 0 ? `: ${targets.join(' | ')}` : '';
+}

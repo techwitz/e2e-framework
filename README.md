@@ -21,7 +21,7 @@ your own project, the same way you'd build on top of any other test framework.
 
 ## Install
 
-The source lives in a private repository (`bientech-ai/e2e-framework`), so you need access to it first. Inside the
+The source lives in a private repository (`techwitz/e2e-framework`), so you need access to it first. Inside the
 Bien workspace, depend on it through the pnpm workspace (this is how `lxp-frontend/lxp-e2e-tests` does it):
 
 ```json
@@ -32,7 +32,7 @@ Outside the workspace, build a tarball from a clone and install that (`dist/` is
 `README.md` and `LICENSE` are packed):
 
 ```bash
-git clone https://github.com/bientech-ai/e2e-framework.git
+git clone https://github.com/techwitz/e2e-framework.git
 cd e2e-framework
 pnpm install && pnpm build && npm pack        # writes open-test-playwright-core-1.0.0.tgz
 
@@ -496,7 +496,7 @@ add one or use the `npx tsx` form above with your own spec directory.
 ## Working on the framework itself
 
 ```bash
-git clone https://github.com/bientech-ai/e2e-framework.git
+git clone https://github.com/techwitz/e2e-framework.git
 cd e2e-framework
 pnpm install
 pnpm typecheck

@@ -21,11 +21,29 @@ your own project, the same way you'd build on top of any other test framework.
 
 ## Install
 
+The source lives in a private repository (`bientech-ai/e2e-framework`), so you need access to it first. Inside the
+Bien workspace, depend on it through the pnpm workspace (this is how `lxp-frontend/lxp-e2e-tests` does it):
+
+```json
+"@open-test/playwright-core": "workspace:*"
+```
+
+Outside the workspace, build a tarball from a clone and install that (`dist/` is built by `pnpm build`, and only `dist`,
+`README.md` and `LICENSE` are packed):
+
 ```bash
-npm install --save-dev @open-test/playwright-core @playwright/test
-# or: pnpm add -D @open-test/playwright-core @playwright/test
+git clone https://github.com/bientech-ai/e2e-framework.git
+cd e2e-framework
+pnpm install && pnpm build && npm pack        # writes open-test-playwright-core-1.0.0.tgz
+
+# in your own project
+npm install --save-dev ./open-test-playwright-core-1.0.0.tgz @playwright/test
+# or: pnpm add -D ./open-test-playwright-core-1.0.0.tgz @playwright/test
 npx playwright install --with-deps
 ```
+
+If the package is later published to a registry your team can reach, `npm install --save-dev @open-test/playwright-core`
+works the same way.
 
 ## Quickstart
 
@@ -177,9 +195,9 @@ export default defineConfig({
 });
 ```
 
-If your bundler/runtime can't resolve a package subpath directly (this repo's own example suite
-hits exactly that, since it consumes `core` via pnpm's `workspace:*` protocol against source, not
-a built `dist/`), add one small local file instead and point the reporter array at that:
+If your bundler/runtime can't resolve a package subpath directly (the example suite in the
+workspace, `lxp-frontend/lxp-e2e-tests`, hits exactly that, since it consumes `core` via pnpm's `workspace:*` protocol
+against source, not a built `dist/`), add one small local file instead and point the reporter array at that:
 
 ```ts
 // reporters/aiHtmlReporter.ts
@@ -291,7 +309,7 @@ export default defineConfig({
 
 Mix both env vars to get the full grid in one run. A base project's own `grep`/`grepInvert`/
 `testMatch`/etc. carry through to every generated variant, so per-app tag filtering (like the
-admin-vs-learner split in this repo's own example suite) keeps working across the whole matrix.
+admin-vs-learner split in the example suite in `lxp-frontend/lxp-e2e-tests`) keeps working across the whole matrix.
 
 ## Building your own test suite on top
 
@@ -455,11 +473,9 @@ executable, always-up-to-date documentation for stakeholders who don't read code
 npx tsx node_modules/@open-test/playwright-core/src/bdd-living-docs/cli.ts <specDir> <outputPath> --title="My Project"
 ```
 
-Or, if you've cloned this repo directly to work on the framework itself:
-
-```bash
-pnpm generate:living-docs
-```
+Or, if you've cloned this repo directly to work on the framework itself, `pnpm generate:living-docs` runs the same CLI
+against a `./specs` folder and writes `./living-docs/TEST_SPECIFICATIONS.md`. This repo has no `specs` folder of its own, so
+add one or use the `npx tsx` form above with your own spec directory.
 
 ## What's in here
 
@@ -484,6 +500,7 @@ git clone https://github.com/bientech-ai/e2e-framework.git
 cd e2e-framework
 pnpm install
 pnpm typecheck
+pnpm build
 ```
 
 ## Contributing

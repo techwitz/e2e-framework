@@ -480,7 +480,7 @@ pnpm generate:living-docs
 ## Working on the framework itself
 
 ```bash
-git clone https://github.com/techwitz/e2e-framework.git
+git clone https://github.com/bientech-ai/e2e-framework.git
 cd e2e-framework
 pnpm install
 pnpm typecheck
